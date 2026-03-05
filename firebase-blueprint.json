@@ -1,0 +1,25 @@
+{
+  "entities": {
+    "WorkoutRoutine": {
+      "title": "Workout Routine",
+      "description": "A generated fitness routine for a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "weeklySchedule": { "type": "array" },
+        "dietSuggestions": { "type": "array" }
+      },
+      "required": ["id", "userId", "name", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/routines/{routineId}": {
+      "schema": "WorkoutRoutine",
+      "description": "User's saved workout routines"
+    }
+  }
+}

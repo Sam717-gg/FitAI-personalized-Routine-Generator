@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidRoutine(data) {
+      return data.keys().hasAll(['id', 'userId', 'name', 'createdAt']) &&
+             data.id is string &&
+             data.userId is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.createdAt is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+      
+      match /routines/{routineId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidRoutine(request.resource.data) && request.resource.data.userId == userId;
+        allow update: if isOwner(userId) && isValidRoutine(request.resource.data) && request.resource.data.userId == userId;
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}
