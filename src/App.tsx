@@ -40,10 +40,16 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { generateFitnessRoutine } from './services/geminiService';
-import { UserProfile, FitnessGoal, FitnessLevel, Equipment } from './types';
+import { UserProfile, FitnessGoal, FitnessLevel, Equipment, ProgressEntry, WorkoutLog, MealLog, Milestone } from './types';
 import { initFirebase, signIn, logOut, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, query, orderBy, onSnapshot, setDoc, doc, deleteDoc } from 'firebase/firestore';
+import { ProgressTracker } from './components/ProgressTracker';
+import { TrendCharts, StreakDisplay } from './components/TrendCharts';
+import { MealLogger, MilestoneTracker } from './components/MealLogger';
+import { InsightsPanel } from './components/InsightsPanel';
+import { ProgressService } from './services/progressService';
+import { AnalyticsService } from './services/analyticsService';
 
 // Error Boundary Component
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: any }> {
@@ -130,6 +136,7 @@ export default function App() {
   const [history, setHistory] = useState<any[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [view, setView] = useState<'generator' | 'progress'>('generator');
+  const [progressView, setProgressView] = useState<'overview' | 'workouts' | 'meals' | 'milestones'>('overview');
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [firebaseError, setFirebaseError] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile>({
@@ -144,6 +151,13 @@ export default function App() {
     equipment: ['none'],
     daysPerWeek: 3,
   });
+
+  // Progress tracking state
+  const [progressHistory, setProgressHistory] = useState<ProgressEntry[]>([]);
+  const [workoutLogs, setWorkoutLogs] = useState<WorkoutLog[]>([]);
+  const [todayMeals, setTodayMeals] = useState<MealLog[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [progressService, setProgressService] = useState<ProgressService | null>(null);
 
   useEffect(() => {
     let unsubscribeAuth: (() => void) | undefined;
@@ -195,6 +209,44 @@ export default function App() {
       unsubscribeFirestore?.();
     };
   }, []);
+
+  // Initialize progress service and load data
+  useEffect(() => {
+    const initProgressService = async () => {
+      if (!user) return;
+      
+      try {
+        const { db } = await initFirebase();
+        const service = ProgressService.getInstance(db);
+        setProgressService(service);
+
+        // Load progress data
+        const progress = await service.getProgressHistory(user.uid, 90);
+        const logs = await service.getWorkoutLogs(user.uid, 90);
+        const milesList = await service.getMilestones(user.uid);
+        const mealsToday = await service.getMealLogs(user.uid);
+
+        setProgressHistory(progress);
+        setWorkoutLogs(logs);
+        setMilestones(milesList);
+        setTodayMeals(mealsToday);
+      } catch (error) {
+        console.warn("Progress service init failed, using localStorage:", error);
+        // Fallback to localStorage
+        const savedProgress = JSON.parse(localStorage.getItem(`progress_${user?.uid}`) || '[]');
+        const savedLogs = JSON.parse(localStorage.getItem(`workoutLogs_${user?.uid}`) || '[]');
+        const savedMiles = JSON.parse(localStorage.getItem(`milestones_${user?.uid}`) || '[]');
+        const savedMeals = JSON.parse(localStorage.getItem(`mealLogs_${user?.uid}`) || '[]');
+        
+        setProgressHistory(savedProgress);
+        setWorkoutLogs(savedLogs);
+        setMilestones(savedMiles);
+        setTodayMeals(savedMeals);
+      }
+    };
+
+    initProgressService();
+  }, [user]);
 
   const handleNext = () => setStep(s => s + 1);
   const handleBack = () => setStep(s => s - 1);
@@ -283,7 +335,119 @@ export default function App() {
     }
   };
 
+  // Progress tracking handlers
+  const handleAddProgress = async (entry: Omit<ProgressEntry, 'id' | 'createdAt' | 'userId'>) => {
+    if (!user || !progressService) return;
+    
+    try {
+      setLoading(true);
+      const id = await progressService.addProgressEntry(user.uid, {
+        ...entry,
+        userId: user.uid,
+      });
+      
+      const updated = [...progressHistory, {
+        ...entry,
+        id,
+        userId: user.uid,
+        createdAt: new Date().toISOString(),
+      }];
+      setProgressHistory(updated);
+    } catch (error) {
+      console.error("Failed to add progress:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogWorkout = async (log: Omit<WorkoutLog, 'id' | 'createdAt' | 'userId'>) => {
+    if (!user || !progressService) return;
+    
+    try {
+      setLoading(true);
+      const id = await progressService.logWorkout(user.uid, {
+        ...log,
+        userId: user.uid,
+      });
+      
+      const updated = [...workoutLogs, {
+        ...log,
+        id,
+        userId: user.uid,
+        createdAt: new Date().toISOString(),
+      }];
+      setWorkoutLogs(updated);
+    } catch (error) {
+      console.error("Failed to log workout:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogMeal = async (meal: Omit<MealLog, 'id' | 'createdAt' | 'userId'>) => {
+    if (!user || !progressService) return;
+    
+    try {
+      setLoading(true);
+      const id = await progressService.logMeal(user.uid, {
+        ...meal,
+        userId: user.uid,
+      });
+      
+      const updated = [...todayMeals, {
+        ...meal,
+        id,
+        userId: user.uid,
+        createdAt: new Date().toISOString(),
+      }];
+      setTodayMeals(updated);
+    } catch (error) {
+      console.error("Failed to log meal:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddMilestone = async (milestone: Omit<Milestone, 'id' | 'createdAt'>) => {
+    if (!user || !progressService) return;
+    
+    try {
+      setLoading(true);
+      const id = await progressService.createMilestone(user.uid, {
+        ...milestone,
+        userId: user.uid,
+      });
+      
+      const updated = [...milestones, {
+        ...milestone,
+        id,
+        userId: user.uid,
+        createdAt: new Date().toISOString(),
+      }];
+      setMilestones(updated);
+    } catch (error) {
+      console.error("Failed to add milestone:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdateMilestone = async (milestoneId: string, updates: Partial<Milestone>) => {
+    if (!user || !progressService) return;
+    
+    try {
+      await progressService.updateMilestone(user.uid, milestoneId, updates);
+      const updated = milestones.map(m => m.id === milestoneId ? { ...m, ...updates } : m);
+      setMilestones(updated);
+    } catch (error) {
+      console.error("Failed to update milestone:", error);
+    }
+  };
+
   const bmiData = calculateBMI(profile.weight, profile.height);
+  
+  // Calculate streak
+  const streak = AnalyticsService.calculateStreak(workoutLogs);
 
   return (
     <ErrorBoundary>
@@ -350,97 +514,123 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="glass-card p-8"
+              className="space-y-6"
             >
+              {/* Header */}
               <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-3">
                   <TrendingUp className="text-emerald-500" />
-                  <h2 className="text-xl font-semibold">Progress Tracking</h2>
+                  <h2 className="text-xl font-semibold">Progress & Analytics</h2>
                 </div>
-                <button onClick={() => setView('generator')} className="text-sm text-slate-400 hover:text-slate-600">Back to Generator</button>
+                <button onClick={() => setView('generator')} className="text-sm text-slate-400 hover:text-slate-600 bg-white px-3 py-1 rounded-lg border border-slate-200">Back to Generator</button>
               </div>
 
-              {history.filter(h => h.profileSnapshot).length < 2 ? (
-                <div className="text-center py-12 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
-                  <LineChartIcon className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                  <p className="text-slate-500">Generate at least two routines to see your progress chart.</p>
-                </div>
-              ) : (
-                <div className="space-y-8">
-                  <div className="h-[300px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart
-                        data={[...history]
-                          .filter(h => h.profileSnapshot)
-                          .reverse()
-                          .map(h => ({
-                            date: new Date(h.createdAt).toLocaleDateString(),
-                            weight: h.profileSnapshot.weight,
-                            bmi: calculateBMI(h.profileSnapshot.weight, h.profileSnapshot.height).bmi
-                          }))}
-                      >
-                        <defs>
-                          <linearGradient id="colorWeight" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.1}/>
-                            <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                        <XAxis 
-                          dataKey="date" 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{ fontSize: 10, fill: '#94a3b8' }}
-                        />
-                        <YAxis 
-                          axisLine={false} 
-                          tickLine={false} 
-                          tick={{ fontSize: 10, fill: '#94a3b8' }}
-                          domain={['dataMin - 5', 'dataMax + 5']}
-                        />
-                        <Tooltip 
-                          contentStyle={{ 
-                            backgroundColor: '#fff', 
-                            borderRadius: '12px', 
-                            border: 'none', 
-                            boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' 
-                          }}
-                        />
-                        <Area 
-                          type="monotone" 
-                          dataKey="weight" 
-                          stroke="#10b981" 
-                          strokeWidth={3}
-                          fillOpacity={1} 
-                          fill="url(#colorWeight)" 
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
+              {/* Tab Navigation */}
+              <div className="flex gap-2 bg-white rounded-xl p-2 border border-slate-200 overflow-x-auto">
+                {[
+                  { id: 'overview', label: '📊 Overview', icon: 'overview' },
+                  { id: 'workouts', label: '💪 Workouts', icon: 'workouts' },
+                  { id: 'meals', label: '🍎 Meals', icon: 'meals' },
+                  { id: 'milestones', label: '🎯 Goals', icon: 'milestones' },
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setProgressView(tab.id as typeof progressView)}
+                    className={cn(
+                      "px-4 py-2 rounded-lg font-semibold transition-all whitespace-nowrap",
+                      progressView === tab.id
+                        ? "bg-emerald-500 text-white shadow-lg"
+                        : "text-slate-600 hover:text-slate-900"
+                    )}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
-                      <p className="text-xs font-bold text-emerald-600 uppercase mb-1">Latest Weight</p>
-                      <p className="text-2xl font-bold text-emerald-900">
-                        {history.find(h => h.profileSnapshot)?.profileSnapshot.weight} kg
-                      </p>
-                    </div>
-                    <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
-                      <p className="text-xs font-bold text-blue-600 uppercase mb-1">Total Change</p>
-                      <p className="text-2xl font-bold text-blue-900">
-                        {(() => {
-                          const validHistory = history.filter(h => h.profileSnapshot);
-                          if (validHistory.length < 2) return '0 kg';
-                          const latest = validHistory[0].profileSnapshot.weight;
-                          const oldest = validHistory[validHistory.length - 1].profileSnapshot.weight;
-                          const diff = latest - oldest;
-                          return `${diff > 0 ? '+' : ''}${diff} kg`;
-                        })()}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
+              {/* Tab Content */}
+              <AnimatePresence mode="wait">
+                {progressView === 'overview' && (
+                  <motion.div
+                    key="overview"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="bg-white rounded-2xl p-8 border border-slate-200 shadow-lg space-y-6"
+                  >
+                    {/* Streak Display */}
+                    <StreakDisplay 
+                      currentStreak={streak.currentStreak}
+                      longestStreak={streak.longestStreak}
+                      workoutDaysThisWeek={streak.workoutDaysThisWeek}
+                      targetDaysPerWeek={profile.daysPerWeek}
+                      lastWorkoutDate={streak.lastWorkoutDate}
+                    />
+
+                    {/* Trend Charts */}
+                    <TrendCharts 
+                      progressHistory={progressHistory}
+                      workoutLogs={workoutLogs}
+                    />
+
+                    {/* Insights Panel */}
+                    <InsightsPanel 
+                      progressHistory={progressHistory}
+                      workoutLogs={workoutLogs}
+                      goalType={profile.goal}
+                    />
+                  </motion.div>
+                )}
+
+                {progressView === 'workouts' && (
+                  <motion.div
+                    key="workouts"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="bg-white rounded-2xl p-8 border border-slate-200 shadow-lg"
+                  >
+                    <ProgressTracker
+                      onAddProgress={handleAddProgress}
+                      progressHistory={progressHistory}
+                      isLoading={loading}
+                    />
+                  </motion.div>
+                )}
+
+                {progressView === 'meals' && (
+                  <motion.div
+                    key="meals"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="bg-white rounded-2xl p-8 border border-slate-200 shadow-lg"
+                  >
+                    <MealLogger
+                      onLogMeal={handleLogMeal}
+                      todayMeals={todayMeals}
+                      isLoading={loading}
+                    />
+                  </motion.div>
+                )}
+
+                {progressView === 'milestones' && (
+                  <motion.div
+                    key="milestones"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="bg-white rounded-2xl p-8 border border-slate-200 shadow-lg"
+                  >
+                    <MilestoneTracker
+                      milestones={milestones}
+                      onAddMilestone={handleAddMilestone}
+                      onUpdateMilestone={handleUpdateMilestone}
+                      isLoading={loading}
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           ) : showHistory ? (
             <motion.div
